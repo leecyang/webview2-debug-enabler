@@ -5,13 +5,14 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  workflow_dispatch: # 增加手动启动按钮，方便调试
+  workflow_dispatch: 
 
 env:
   SOLUTION_FILE_PATH: .
   BUILD_CONFIGURATION: Release
-  # 关键：指定编译 x64 版本，因为现代 WebView2 应用基本都是 64 位的
-  BUILD_PLATFORM: x64 
+  BUILD_PLATFORM: x64
+  # 解决 Node.js 20 警告
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true 
 
 permissions:
   contents: read
@@ -21,25 +22,54 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout Code
+      uses: actions/checkout@v4
 
     - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@v2 # 升级到 v2 更稳定
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Setup NuGet
+      uses: NuGet/setup-nuget@v2
 
     - name: Restore NuGet packages
-      working-directory: ${{env.GITHUB_WORKSPACE}}
       run: nuget restore ${{env.SOLUTION_FILE_PATH}}
 
-    - name: Build
+    # 关键补丁步：强行将项目文件修改为 C++20 标准并开启严格模式
+    - name: Patch Project Files for C++20
+      shell: powershell
+      run: |
+        Get-ChildItem -Recurse *.vcxproj | ForEach-Object {
+          $content = Get-Content $_.FullName
+          # 如果没有 LanguageStandard 标签，就插入一个；如果有，就替换
+          if ($content -match "<LanguageStandard>") {
+            $content = $content -replace '<LanguageStandard>.*</LanguageStandard>', '<LanguageStandard>stdcpp20</LanguageStandard>'
+          } else {
+            $content = $content -replace '</ClCompile>', '  <LanguageStandard>stdcpp20</LanguageStandard>`n    </ClCompile>'
+          }
+          # 强制开启一致性模式，解决 C2664 字符转换错误
+          $content = $content -replace '</ClCompile>', '  <ConformanceMode>true</ConformanceMode>`n    </ClCompile>'
+          $content | Set-Content $_.FullName
+        }
+
+    - name: Build Solution
       working-directory: ${{env.GITHUB_WORKSPACE}}
-      # 增加 /p:Platform 参数
-      run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} /p:Platform=${{env.BUILD_PLATFORM}} ${{env.SOLUTION_FILE_PATH}}
+      # 增加 LanguageStandard 和一致性开关的命令行参数覆盖
+      run: |
+        msbuild ${{env.SOLUTION_FILE_PATH}} `
+          /m `
+          /p:Configuration=${{env.BUILD_CONFIGURATION}} `
+          /p:Platform=${{env.BUILD_PLATFORM}} `
+          /p:PlatformToolset=v143 `
+          /p:LanguageStandard=stdcpp20 `
+          /p:AdditionalOptions="/permissive-" `
+          /target:Rebuild
 
     - name: Upload Artifacts
-      uses: actions/upload-artifact@v4 # 必须使用 v4 版本
+      uses: actions/upload-artifact@v4
       with:
-        name: WebView2-Debug-Enabler
-        # 这里的路径对应编译后的输出位置
+        name: WebView2-Debug-Enabler-x64
+        # 递归搜索所有目录下的 Release 产物，确保能抓到 .exe 和 .dll
         path: |
-          x64/Release/*.exe
-          x64/Release/*.dll
+          **/x64/Release/*.exe
+          **/x64/Release/*.dll
+          **/x64/Release/*.pdb
