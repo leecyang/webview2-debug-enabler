@@ -1,0 +1,45 @@
+name: MSBuild
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch: # 增加手动启动按钮，方便调试
+
+env:
+  SOLUTION_FILE_PATH: .
+  BUILD_CONFIGURATION: Release
+  # 关键：指定编译 x64 版本，因为现代 WebView2 应用基本都是 64 位的
+  BUILD_PLATFORM: x64 
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v2 # 升级到 v2 更稳定
+
+    - name: Restore NuGet packages
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: nuget restore ${{env.SOLUTION_FILE_PATH}}
+
+    - name: Build
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      # 增加 /p:Platform 参数
+      run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} /p:Platform=${{env.BUILD_PLATFORM}} ${{env.SOLUTION_FILE_PATH}}
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4 # 必须使用 v4 版本
+      with:
+        name: WebView2-Debug-Enabler
+        # 这里的路径对应编译后的输出位置
+        path: |
+          x64/Release/*.exe
+          x64/Release/*.dll
