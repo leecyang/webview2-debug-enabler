@@ -11,9 +11,6 @@ env:
   BUILD_PLATFORM: x64
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true 
 
-permissions:
-  contents: read
-
 jobs:
   build:
     runs-on: windows-latest
@@ -31,25 +28,55 @@ jobs:
     - name: Restore NuGet packages
       run: nuget restore ${{env.SOLUTION_FILE_PATH}}
 
+    # 核心步骤：直接修复代码中的包含错误和标准库缺失
+    - name: Force Fix Source Code
+      shell: powershell
+      run: |
+        $files = Get-ChildItem -Recurse -Include *.h, *.cpp
+        foreach ($file in $files) {
+            $content = Get-Content $file.FullName -Raw
+            # 在所有头文件顶部强行注入缺失的标准库包含
+            $header = "#include <string>`n#include <filesystem>`n#include <sstream>`n#include <format>`n#include <iostream>`n#include <stdexcept>`n"
+            if ($content -notmatch "#include <string>") {
+                $content = $header + $content
+            }
+            # 修复 DbgHelp.h 里的 wstring 识别问题
+            $content = $content -replace 'std::wstring', '::std::wstring'
+            $content | Set-Content $file.FullName -Encoding UTF8
+        }
+        
+        # 强制修改 vcxproj 里的 C++ 标准为最新
+        Get-ChildItem -Recurse *.vcxproj | ForEach-Object {
+            $xml = [xml](Get-Content $_.FullName)
+            $ns = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
+            $ns.AddNamespace("ms", "http://schemas.microsoft.com/developer/msbuild/2003")
+            
+            $nodes = $xml.SelectNodes("//ms:ClCompile", $ns)
+            foreach ($node in $nodes) {
+                # 显式创建 LanguageStandard 节点
+                $ls = $xml.CreateElement("LanguageStandard", "http://schemas.microsoft.com/developer/msbuild/2003")
+                $ls.InnerText = "stdcpp20"
+                $node.AppendChild($ls) | Out-Null
+                
+                # 显式创建 ConformanceMode 节点
+                $cm = $xml.CreateElement("ConformanceMode", "http://schemas.microsoft.com/developer/msbuild/2003")
+                $cm.InnerText = "true"
+                $node.AppendChild($cm) | Out-Null
+            }
+            $xml.Save($_.FullName)
+        }
+
     - name: Build Solution
-      working-directory: ${{env.GITHUB_WORKSPACE}}
-      # 我们不在文件里改，直接在这里把 C++20 和相关修复补丁“焊死”在编译指令里
       run: |
         msbuild ${{env.SOLUTION_FILE_PATH}} `
-          -property:Configuration=${{env.BUILD_CONFIGURATION}} `
-          -property:Platform=${{env.BUILD_PLATFORM}} `
-          -property:PlatformToolset=v143 `
-          -property:LanguageStandard=stdcpp20 `
-          -property:ConformanceMode=true `
-          -property:AdditionalOptions="/permissive- /utf-8" `
-          -target:Rebuild `
-          -maxCpuCount
+          -p:Configuration=${{env.BUILD_CONFIGURATION}} `
+          -p:Platform=${{env.BUILD_PLATFORM}} `
+          -target:Rebuild
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: WebView2-Debug-Enabler-Package
+        name: WebView2-Debug-Enabler-Final
         path: |
           **/x64/Release/*.exe
           **/x64/Release/*.dll
-          **/x64/Release/*.pdb
