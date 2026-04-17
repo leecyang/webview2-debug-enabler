@@ -1,0 +1,20 @@
+name: Build Project
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4  # 更新到 v4
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2 # 建议也更新 MSBuild 插件版本
+
+      - name: Build solution
+        run: msbuild /p:Configuration=Release /p:Platform=x64
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4 # 关键修复点：改为 v4
+        with:
+          name: Built-Tool
+          path: x64/Release/
