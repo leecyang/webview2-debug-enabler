@@ -3,15 +3,12 @@ name: MSBuild
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
   workflow_dispatch: 
 
 env:
   SOLUTION_FILE_PATH: .
   BUILD_CONFIGURATION: Release
   BUILD_PLATFORM: x64
-  # 解决 Node.js 20 警告
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true 
 
 permissions:
@@ -34,41 +31,24 @@ jobs:
     - name: Restore NuGet packages
       run: nuget restore ${{env.SOLUTION_FILE_PATH}}
 
-    # 关键补丁步：强行将项目文件修改为 C++20 标准并开启严格模式
-    - name: Patch Project Files for C++20
-      shell: powershell
-      run: |
-        Get-ChildItem -Recurse *.vcxproj | ForEach-Object {
-          $content = Get-Content $_.FullName
-          # 如果没有 LanguageStandard 标签，就插入一个；如果有，就替换
-          if ($content -match "<LanguageStandard>") {
-            $content = $content -replace '<LanguageStandard>.*</LanguageStandard>', '<LanguageStandard>stdcpp20</LanguageStandard>'
-          } else {
-            $content = $content -replace '</ClCompile>', '  <LanguageStandard>stdcpp20</LanguageStandard>`n    </ClCompile>'
-          }
-          # 强制开启一致性模式，解决 C2664 字符转换错误
-          $content = $content -replace '</ClCompile>', '  <ConformanceMode>true</ConformanceMode>`n    </ClCompile>'
-          $content | Set-Content $_.FullName
-        }
-
     - name: Build Solution
       working-directory: ${{env.GITHUB_WORKSPACE}}
-      # 增加 LanguageStandard 和一致性开关的命令行参数覆盖
+      # 我们不在文件里改，直接在这里把 C++20 和相关修复补丁“焊死”在编译指令里
       run: |
         msbuild ${{env.SOLUTION_FILE_PATH}} `
-          /m `
-          /p:Configuration=${{env.BUILD_CONFIGURATION}} `
-          /p:Platform=${{env.BUILD_PLATFORM}} `
-          /p:PlatformToolset=v143 `
-          /p:LanguageStandard=stdcpp20 `
-          /p:AdditionalOptions="/permissive-" `
-          /target:Rebuild
+          -property:Configuration=${{env.BUILD_CONFIGURATION}} `
+          -property:Platform=${{env.BUILD_PLATFORM}} `
+          -property:PlatformToolset=v143 `
+          -property:LanguageStandard=stdcpp20 `
+          -property:ConformanceMode=true `
+          -property:AdditionalOptions="/permissive- /utf-8" `
+          -target:Rebuild `
+          -maxCpuCount
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: WebView2-Debug-Enabler-x64
-        # 递归搜索所有目录下的 Release 产物，确保能抓到 .exe 和 .dll
+        name: WebView2-Debug-Enabler-Package
         path: |
           **/x64/Release/*.exe
           **/x64/Release/*.dll
